@@ -1,0 +1,570 @@
+---
+title: "sim_try_code"
+author: "jinlong"
+date: "6/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = normalizePath('../'))
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, error=FALSE, echo=TRUE)
+```
+
+
+## genetic position
+```{r}
+#impute.pos("data/hyb_pos_v4_1.txt","data/NAM_pos_v4_1.txt")
+```
+
+
+## read in geno data (the data including inbres and hybrids, and code 0,1,2)
+```{r}
+
+geno_hyb2<-read.table("data/geno_hyb_0703.txt")
+geno_inb2<-read.table("data/geno_inb_0703.txt")
+```
+
+
+
+## pheno data
+```{r}
+library(data.table)
+pheno<-fread("data/phe_hyb.txt", data.table=FALSE)
+row.names(pheno)<-pheno[,2]
+pheno<-pheno[,-1:-2]
+phe_all<-pheno
+names(phe_all)
+
+```
+
+
+## index
+
+```{r}
+## filtter key traits
+names(phe_all)
+phe_key<-phe_all[,13:16]
+phe_yield<-phe_all[,c(7,9,11)]
+names(phe_yield)<-c("ERN","KNPR","TKC")
+## filtter key traits
+sca_HIR <- scale(phe_key$HIR)
+
+sca_HPR <- scale(phe_key$HPR)
+sca_AER <- scale(phe_key$AER)
+sca_FFR <- scale(phe_key$FFR)
+sca_ERN <- scale(phe_yield$ERN)
+sca_KNPR <- scale(phe_yield$KNPR)
+sca_TKC <- scale(phe_yield$TKC)
+
+index_phe_raw1<-scale(sca_HIR+sca_HPR+sca_AER+sca_FFR)
+index_phe_raw2<-scale(sca_ERN+sca_KNPR+sca_TKC)
+
+index<-NULL
+for (i in c(0,3,5,7,10)){
+  index_w<-scale(index_phe_raw1*i/10 +index_phe_raw2*(10-i)/10)
+  index<-cbind(index,index_w)
+}
+
+
+index<-data.frame(index)
+names(index)<-paste0("w-",c(0,0.3,0.5,0.7,1))
+row.names(index)<-row.names(pheno)
+index
+
+
+```
+
+
+
+
+
+
+
+
+## map information
+
+```{r}
+library(hypred)
+
+map_raw<-read.csv("data/pos_info_snp.csv",header = T)
+map <- list("1"=t(map_raw[which(map_raw$chrom==1),4]),
+            "2"=t(map_raw[which(map_raw$chrom==2),4]),
+            "3"=t(map_raw[which(map_raw$chrom==3),4]),
+            "4"=t(map_raw[which(map_raw$chrom==4),4]),
+            "5"=t(map_raw[which(map_raw$chrom==5),4]),
+            "6"=t(map_raw[which(map_raw$chrom==6),4]),
+            "7"=t(map_raw[which(map_raw$chrom==7),4]),
+            "8"=t(map_raw[which(map_raw$chrom==8),4]),
+            "9"=t(map_raw[which(map_raw$chrom==9),4]),
+            "10"=t(map_raw[which(map_raw$chrom==10),4]))
+
+
+geno<-cbind(c(398.8,251.4,273.72,257.30,234.20,174.44,229.05,216.13,210.56,171.80), c(4924,3661,3761,3207,3227,2482,2504,2415,2490,2216))
+
+
+
+gedef_all<-list()
+for (i in 1:10){
+  gedef<-hypredGenome(1,geno[i,1],geno[i,2])
+  change_map <- as.numeric(map[[i]])
+  regular_map <- hypredNewMap(gedef, change_map)
+  regular_map<-list(regular_map)
+  #slot(regular_map,"pos.snp")
+  gedef_all<-c(gedef_all,regular_map)
+}
+
+```
+
+
+## rrblup model
+```{r}
+library(rrBLUP)
+w0<- mixed.solve(y=index[,1],Z=geno_hyb2,SE=F,return.Hinv=F)
+w0.3<- mixed.solve(y=index[,2],Z=geno_hyb2,SE=F,return.Hinv=F)
+w0.5<- mixed.solve(y=index[,3],Z=geno_hyb2,SE=F,return.Hinv=F)
+w0.7<- mixed.solve(y=index[,4],Z=geno_hyb2,SE=F,return.Hinv=F)
+w1<- mixed.solve(y=index[,5],Z=geno_hyb2,SE=F,return.Hinv=F)
+index_model<-list(w0,w0.3,w0.5,w0.7,w1)
+
+
+hir<-mixed.solve(y=phe_all[,13],Z=geno_hyb2,SE=F,return.Hinv=F)
+hpr<-mixed.solve(y=phe_all[,14],Z=geno_hyb2,SE=F,return.Hinv=F)
+aer<-mixed.solve(y=phe_all[,15],Z=geno_hyb2,SE=F,return.Hinv=F)
+ffr<-mixed.solve(y=phe_all[,16],Z=geno_hyb2,SE=F,return.Hinv=F)
+ern<-mixed.solve(y=phe_all[,7],Z=geno_hyb2,SE=F,return.Hinv=F)
+knpr<-mixed.solve(y=phe_all[,9],Z=geno_hyb2,SE=F,return.Hinv=F)
+tkc<-mixed.solve(y=phe_all[,11],Z=geno_hyb2,SE=F,return.Hinv=F)
+```
+
+
+
+
+
+
+```{r}
+
+  library(stringr)
+  ped<-data.frame(cbind(1:nrow(index),str_split_fixed(row.names(pheno), "x", 2)))
+  names(ped)<-c("id","p1","p2")
+  pre_hir_g0<-as.vector(hir$beta )+ (as.matrix(geno_hyb2) %*% as.matrix(hir$u))[,1]
+  pre_hpr_g0<-as.vector(hpr$beta )+ (as.matrix(geno_hyb2) %*% as.matrix(hpr$u))[,1]
+  pre_aer_g0<-as.vector(aer$beta )+ (as.matrix(geno_hyb2) %*% as.matrix(aer$u))[,1]
+  pre_ffr_g0<-as.vector(ffr$beta )+ (as.matrix(geno_hyb2) %*% as.matrix(ffr$u))[,1]
+  pre_ern_g0<-as.vector(ern$beta )+ (as.matrix(geno_hyb2) %*% as.matrix(ern$u))[,1]
+  pre_knpr_g0<-as.vector(knpr$beta )+ (as.matrix(geno_hyb2) %*% as.matrix(knpr$u))[,1]
+  pre_tkc_g0<-as.vector(tkc$beta )+ (as.matrix(geno_hyb2) %*% as.matrix(tkc$u))[,1]
+
+
+
+library(rrBLUP)
+library(stringr)
+g0_n<-20  ##g0_n is the number of selection from generation 0
+n_seed<-1000 ## n_dh is the number of DH lines per F1
+select_r<-20 ## select_r is the number of populations select to product DH
+ge<-30 ##ge is the generation number
+rep<-20  ## rep is the repeat number
+
+
+
+gebv_all<-NULL
+dh_number_cycle<-NULL
+
+for (re in 1:rep){
+    for (p in 1:1){
+    
+      raw <- index_model[[p]]
+      effect_raw <- as.matrix(raw$u)
+      pre_g0 <- as.vector(raw$beta )+ (as.matrix(geno_hyb2) %*% effect_raw)[,1]
+      sec_num<-order(pre_g0, decreasing = T)[1:g0_n]
+      select_name<-row.names(index)[sec_num]
+      select_table<-str_split_fixed(select_name, "x", 2)
+      
+    
+      ## generation 0
+      
+    
+      gebv_g0<-cbind(ped[rep(1:nrow(ped),8),],c( pre_hir_g0, pre_hpr_g0, pre_aer_g0, pre_ffr_g0, pre_ern_g0, pre_knpr_g0, pre_tkc_g0,pre_g0),0,names(index)[p],re,rep(c("HIR","HPR","AER","FFR","ERN","KNPR","TKC","Index"),each = nrow(ped)))
+      
+    
+      founder<-list()
+      for (i in 1:g0_n){
+        founder_g0n<-list(rbind(geno_inb2[select_table[i,1],],geno_inb2[select_table[i,2],]))
+        founder<-c(founder,founder_g0n)
+      }
+      
+      f1_hir<-as.vector(hir$beta )+ (as.matrix(geno_hyb2[sec_num,]) %*% as.matrix(hir$u))[,1]
+      f1_hpr<-as.vector(hpr$beta )+ (as.matrix(geno_hyb2[sec_num,]) %*% as.matrix(hpr$u))[,1]
+      f1_aer<-as.vector(aer$beta )+ (as.matrix(geno_hyb2[sec_num,]) %*% as.matrix(aer$u))[,1]
+      f1_ffr<-as.vector(ffr$beta )+ (as.matrix(geno_hyb2[sec_num,]) %*% as.matrix(ffr$u))[,1]
+      dh_number<-round(1000*f1_hir*f1_hpr*f1_aer*f1_ffr)
+      
+      dh_number_g0<-cbind(round(1000*pre_hir_g0*pre_hpr_g0*pre_aer_g0*pre_ffr_g0),0,names(index)[p])
+      dh_number_cycle<-rbind(dh_number_cycle,dh_number_g0)
+      
+      
+      pre_all<-NULL
+      for (g in 1:ge){
+        
+        ## generate dh and f1
+        dh_gn<-NULL
+        for (n in 1:select_r){
+          ## build founder including 2 geno
+          founder_list<-list()
+          for (chr in 1:10){
+            if (chr == 1){
+              first=1
+            }else{
+              first<-sum(geno[1:(chr-1),2])+1
+            }
+            last<-sum(geno[1:chr,2])
+            founder_c<-list(founder[[n]][,first:last])
+            founder_list<-c(founder_list,founder_c)
+          }
+          
+          
+          ## dh_number[n] is the number of DH lines per F1
+          dh_pn<-NULL
+          for (j in 1:dh_number[n]){
+            dh_n<-NULL
+            for (i in 1:10){
+              gedef<-gedef_all[[i]]
+              ## generate new geno on i chrosome base on parents geno(founder)
+              dh_n_c<-hypredRecombine(gedef,
+                                      genomeA = founder_list[[i]][1,],
+                                      genomeB = founder_list[[i]][2,],
+                                      mutate = FALSE,
+                                      block = FALSE)
+              
+              dh_n<-c(dh_n,dh_n_c)
+            }
+            
+            dh_pn<-rbind(dh_pn,dh_n)
+            pre_dh<-as.vector(raw$beta )+ (as.matrix(dh_pn) %*% effect_raw)[,1]
+            dh_pn<-dh_pn[order(pre_dh, decreasing = T)[1],]
+          }
+          
+          dh_gn<-rbind(dh_gn,dh_pn)
+      }
+      
+      
+      ## get the mated geno, using dh geno，NC2 Diagonal cross
+      f1_g<-NULL
+      for (i in 1:nrow(dh_gn)){
+        for (j in 1:nrow(dh_gn)) {
+          if (i < j){
+            
+            f1_g_n<-cbind(i,j,20*g,t(as.vector(dh_gn[i,]+dh_gn[j,])))
+            f1_g<-rbind(f1_g,f1_g_n)
+          }
+        }
+      }
+      
+      #A.mat(dh_gn)
+      
+      #nrow(f1_g)
+      
+      value<-(as.vector(raw$beta) + (as.matrix(f1_g[,-(1:3)]) %*% effect_raw)[,1])
+      pre <- cbind(f1_g[,1:3],value,g,names(index)[p])
+      pre<-as.data.frame(pre)
+      select_n<-order(pre[,4], decreasing = T)
+      #pre[select_n[1:20],]
+      
+      ## renew founder
+      f1_s_id<-pre[select_n[1:select_r],1:3]
+      founder<-list()
+      for (dh_f in 1:select_r){
+        founder_n_1<-dh_gn[f1_s_id[dh_f,1],]
+        founder_n_2<-dh_gn[f1_s_id[dh_f,2],]
+        founder_n<-list(rbind( founder_n_1, founder_n_2))
+        founder<-c(founder,founder_n)
+      }
+      
+        f1_hir_s<-as.vector(hir$beta )+ (as.matrix(f1_g[select_n[1:select_r],-(1:3)]) %*% as.matrix(hir$u))[,1]
+        f1_hpr_s<-as.vector(hpr$beta )+ (as.matrix(f1_g[select_n[1:select_r],-(1:3)]) %*% as.matrix(hpr$u))[,1]
+        f1_aer_s<-as.vector(aer$beta )+ (as.matrix(f1_g[select_n[1:select_r],-(1:3)]) %*% as.matrix(aer$u))[,1]
+        f1_ffr_s<-as.vector(ffr$beta )+ (as.matrix(f1_g[select_n[1:select_r],-(1:3)]) %*% as.matrix(ffr$u))[,1]
+        dh_number<-round(1000*f1_hir_s*f1_hpr_s*f1_aer_s*f1_ffr_s)
+        dh_number_cycle<-rbind(dh_number_cycle,cbind(dh_number,g,names(index)[p]))
+        
+        
+      pre_hir_g<-as.vector(hir$beta )+ (as.matrix(f1_g[,-(1:3)]) %*% as.matrix(hir$u))[,1]
+      pre_hpr_g<-as.vector(hpr$beta )+ (as.matrix(f1_g[,-(1:3)]) %*% as.matrix(hpr$u))[,1]
+      pre_aer_g<-as.vector(aer$beta )+ (as.matrix(f1_g[,-(1:3)]) %*% as.matrix(aer$u))[,1]
+      pre_ffr_g<-as.vector(ffr$beta )+ (as.matrix(f1_g[,-(1:3)]) %*% as.matrix(ffr$u))[,1]
+      pre_ern_g<-as.vector(ern$beta )+ (as.matrix(f1_g[,-(1:3)]) %*% as.matrix(ern$u))[,1]
+      pre_knpr_g<-as.vector(knpr$beta )+ (as.matrix(f1_g[,-(1:3)]) %*% as.matrix(knpr$u))[,1]
+      pre_tkc_g<-as.vector(tkc$beta )+ (as.matrix(f1_g[,-(1:3)]) %*% as.matrix(tkc$u))[,1]
+      dat<-f1_g[,1:3]
+      pre_g<-data.frame(cbind(dat[rep(1:nrow(dat),8),],c( pre_hir_g, pre_hpr_g, pre_aer_g, pre_ffr_g, pre_ern_g, pre_knpr_g, pre_tkc_g,value),g,names(index)[p],re,rep(c("HIR","HPR","AER","FFR","ERN","KNPR","TKC","Index"),each = nrow(dat))))
+      names(pre_g)<-c("id","p1","p2","gebv","generation","phe_s","rep","phe")
+      pre_all<-rbind(pre_all,pre_g)
+      print(paste("pheno: ",p,"cycle: ",g,"repeat: ",re))
+    }
+    
+      #class(pre_all$gebv)
+      #pre_all<-NULL
+    names(gebv_g0)=names(pre_all)<-c("id","p1","p2","gebv","generation","phe_s","rep","phe")
+    pre_all$gebv<-as.numeric(as.character(pre_all$gebv))
+    gebv_g<-rbind(gebv_g0,pre_all)
+    gebv_all<-rbind(gebv_all,gebv_g)
+    
+    }
+}
+
+library(plyr)
+#gebv_all<-data.table(gebv_all)
+#gebv_all$gebv<-as.numeric(as.character(gebv_all$gebv))
+gebv_all$generation<-as.numeric(as.character(gebv_all$generation))
+#plot(gebv_all$gebv)
+gebv_sum<-ddply(gebv_all,.(phe_s,phe,generation),function(sub){
+ data.frame(GEBV=mean(sub$gebv))})
+
+#write.table(gebv_sum,"gebv_sum_w0.txt")
+#write.table(dh_num,"dh_num_w0.txt")
+
+```
+
+## dh_number_cycle
+```{r}
+
+dh_num_w0<-read.table("result/dh_num_w0.txt",header=T)
+dh_num_w0.3<-read.table("result/dh_num_w0.3.txt",header=T)
+dh_num_w0.5<-read.table("result/dh_num_w0.5.txt",header=T)
+dh_num_w0.7<-read.table("result/dh_num_w0.7.txt",header=T)
+dh_num_w1<-read.table("result/dh_num_w1.txt",header=T)
+
+dh_num<-rbind(dh_num_w0,dh_num_w0.3,dh_num_w0.5,dh_num_w0.7,dh_num_w1)
+
+
+dh_n_sum<-ddply(dh_num,.(phe_s,cycle),function(sub){
+ data.frame(num=mean(sub$num))})
+
+
+
+
+
+
+library(ggplot2)
+fsize=18
+p<-ggplot(dh_n_sum, aes(x=cycle, y=num, color=phe_s,shape=phe_s)) + geom_line() +geom_point(size=2)+
+ scale_color_manual(values=cbPalette)+
+  theme_classic() +
+  theme(legend.position=c(0.90, 0.18), 
+       #legend.direction = "horizontal",
+        strip.text.x = element_text(size = fsize, face="bold"),
+          axis.text=element_text(size=fsize),
+          axis.title=element_text(size=fsize, face="bold"),
+          #legend.title = element_text(size=12, face="bold"),
+          legend.text = element_text(size=fsize))+ 
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("Cycle")+
+  ylab("NDH")
+
+p
+pdf("/Users/jinlongli/Desktop/dh-diallel/graphs/NDH_7_12.pdf", width=8, height=6)
+p
+dev.off()
+
+
+```
+
+
+## gebv
+```{r}
+
+
+gebv_sum_w0<-read.table("result/gebv_sum_w0.txt",header=T)
+gebv_sum_w0.3<-read.table("result/gebv_sum_w0.3.txt",header=T)
+gebv_sum_w0.5<-read.table("result/gebv_sum_w0.5.txt",header=T)
+gebv_sum_w0.7<-read.table("result/gebv_sum_w0.7.txt",header=T)
+gebv_sum_w1<-read.table("result/gebv_sum_w1.txt",header=T)
+gebv_sum_single<-read.table("result/gebv_sum_single.txt",header=T)
+
+
+gebv_sum<-rbind(gebv_sum_w0,gebv_sum_w0.3,gebv_sum_w0.5,gebv_sum_w0.7,gebv_sum_w1,gebv_sum_single)
+l<-c("Index","TKC","KNPR","ERN","HIR","HPR","AER","FFR")
+gebv_sum$phe<-factor(gebv_sum$phe,levels=l)
+levels(gebv_sum$phe)
+
+
+
+## key traits
+sum_gebv_key<-gebv_sum[which(gebv_sum$phe %in% c("HIR","HPR","AER","FFR")),]
+#sum_gebv_key$GEBV<-as.numeric(as.character(sum_gebv_key$GEBV))
+
+
+
+library(ggplot2)
+fsize=18
+p1<-ggplot(sum_gebv_key, aes(x=generation, y=GEBV, color=phe_s,shape=phe_s)) + geom_line() +geom_point(size=2)+
+ scale_fill_manual(values=c('#999999',"#009E73", "#56B4E9","#E69F00"))+
+ facet_wrap(phe ~ ., scales="free",ncol=2)+
+  theme_classic() +
+  theme(legend.position=c(0.90, 0.18), 
+       #legend.direction = "horizontal",
+        strip.text.x = element_text(size = fsize, face="bold"),
+          axis.text=element_text(size=fsize),
+          axis.title=element_text(size=fsize, face="bold"),
+          #legend.title = element_text(size=12, face="bold"),
+          legend.text = element_text(size=fsize))+ 
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("Generatiion")+
+  ylab("Mean of GEBV")
+
+
+pdf("/Users/jinlongli/Desktop/dh-diallel/graphs/key_gebv_p_7_8.pdf", width=8, height=6)
+p1
+dev.off()
+
+
+## yield-related traits
+sum_gebv_yield<-gebv_sum[which(gebv_sum$phe %in% c("ERN","KNPR","TKC")),]
+#sum_gebv_yield$GEBV<-as.numeric(as.character(sum_gebv_yield$GEBV))
+
+fsize=18
+p2<-ggplot(sum_gebv_yield, aes(x=generation, y=GEBV, color=phe_s,shape=phe_s)) + geom_line() +geom_point(size=2)+
+ scale_fill_manual(values=c('#999999',"#009E73", "#56B4E9","#E69F00"))+
+ facet_wrap(phe ~ ., scales="free",ncol=3)+
+  theme_classic() +
+  theme(legend.position=c(0.90, 0.18), 
+       #legend.direction = "horizontal",
+        strip.text.x = element_text(size = fsize, face="bold"),
+          axis.text=element_text(size=fsize),
+          axis.title=element_text(size=fsize, face="bold"),
+          #legend.title = element_text(size=12, face="bold"),
+          legend.text = element_text(size=fsize))+ 
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("Cycle")+
+  ylab("Mean of GEBVs")
+
+
+pdf("/Users/jinlongli/Desktop/dh-diallel/graphs/yield_gebv_p_7_8.pdf", width=8, height=4)
+p2
+dev.off()
+
+
+
+cbPalette <- c('#999999',"#009E73", "#56B4E9","#E69F00", "#D55E00", "#CC79A7")
+
+fsize=18
+p3<-ggplot(gebv_sum, aes(x=generation, y=GEBV,color = phe_s,shape=phe_s)) + geom_line( ) +geom_point(size=1)+
+  scale_color_manual(values=cbPalette)+
+ #scale_fill_manual(values=c('#999999',"#009E73", "#56B4E9","#E69F00"))+
+ facet_wrap(phe ~ ., scales="free",ncol=4)+
+  theme_classic() +
+  theme(legend.position="bottom", 
+       #legend.direction = "horizontal",
+        strip.text.x = element_text(size = fsize, face="bold"),
+          axis.text=element_text(size=fsize),
+          axis.title=element_text(size=fsize, face="bold"),
+          #legend.title = element_text(size=12, face="bold"),
+          legend.text = element_text(size=fsize))+ 
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("Cycle")+
+  ylab("Mean of GEBVs")
+
+p3
+pdf("/Users/jinlongli/Desktop/dh-diallel/graphs/gebv_sum_7_14.pdf", width=10, height=7)
+p3
+dev.off()
+
+
+
+gebv_sum_sp<-spread(gebv_sum, key = generation, value = GEBV)
+write.table(gebv_sum_sp,"/Users/jinlongli/Desktop/dh-diallel/data/gs/gebv_sum_sp.txt")
+
+```
+
+
+## dh_number_cycle  d100
+```{r}
+
+dh_num_w0_d100<-read.table("result/dh_num_w0_d100.txt",header=T)
+dh_num_w0.3_d100<-read.table("result/dh_num_w0.3_d100.txt",header=T)
+dh_num_w0.5_d100<-read.table("result/dh_num_w0.5_d100.txt",header=T)
+dh_num_w0.7_d100<-read.table("result/dh_num_w0.7_d100.txt",header=T)
+dh_num_w1_d100<-read.table("result/dh_num_w1_d100.txt",header=T)
+
+
+dh_num<-rbind(dh_num_w0_d100,dh_num_w0.3_d100,dh_num_w0.5_d100,dh_num_w0.7_d100,dh_num_w1_d100)
+
+dh_n_sum<-ddply(dh_num,.(phe_s,cycle),function(sub){
+ data.frame(num=mean(sub$num))})
+
+
+
+
+
+
+library(ggplot2)
+fsize=18
+p<-ggplot(dh_n_sum, aes(x=cycle, y=num, color=phe_s,shape=phe_s)) + geom_line() +geom_point(size=2)+
+ scale_fill_manual(values=c('#999999',"#009E73", "#56B4E9","#E69F00"))+
+  scale_color_manual(values=cbPalette)+
+  theme_classic() +
+  theme(legend.position=c(0.90, 0.78), 
+       #legend.direction = "horizontal",
+        strip.text.x = element_text(size = fsize, face="bold"),
+          axis.text=element_text(size=fsize),
+          axis.title=element_text(size=fsize, face="bold"),
+          #legend.title = element_text(size=12, face="bold"),
+          legend.text = element_text(size=fsize))+ 
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("Cycle")+
+  ylab("The Number of Seeds (Nseed)")
+
+
+pdf("/Users/jinlongli/Desktop/dh-diallel/graphs/Nseed_d100_7_13.pdf", width=8, height=6)
+p
+dev.off()
+
+
+```
+
+
+## gebv d100
+```{r}
+
+
+gebv_sum_w0_d100<-read.table("result/gebv_sum_w0_d100.txt",header=T)
+gebv_sum_w0.3_d100<-read.table("result/gebv_sum_w0.3_d100.txt",header=T)
+gebv_sum_w0.5_d100<-read.table("result/gebv_sum_w0.5_d100.txt",header=T)
+gebv_sum_w0.7_d100<-read.table("result/gebv_sum_w0.7_d100.txt",header=T)
+gebv_sum_w1_d100<-read.table("result/gebv_sum_w1_d100.txt",header=T)
+gebv_sum_single_d100<-read.table("result/gebv_sum_single_d100.txt",header=T)
+
+#gebv_sum<-rbind(gebv_sum_w0_d100,gebv_sum_w0.3_d100,gebv_sum_w0.5_d100,gebv_sum_w0.7_d100,gebv_sum_w1_d100)
+gebv_sum<-rbind(gebv_sum_w0_d100,gebv_sum_w0.3_d100,gebv_sum_w0.5_d100,gebv_sum_w0.7_d100,gebv_sum_w1_d100,gebv_sum_single_d100)
+l<-c("Index","TKC","KNPR","ERN","HIR","HPR","AER","FFR")
+gebv_sum$phe<-factor(gebv_sum$phe,levels=l)
+levels(gebv_sum$phe)
+
+
+
+fsize=18
+p3<-ggplot(gebv_sum, aes(x=generation, y=GEBV, color=phe_s,shape=phe_s)) + geom_line() +geom_point(size=1)+
+ scale_fill_manual(values=c('#999999',"#009E73", "#56B4E9","#E69F00"))+
+ facet_wrap(phe ~ ., scales="free",ncol=4)+
+  scale_color_manual(values=cbPalette)+
+  theme_classic() +
+  theme(legend.position="bottom", 
+       #legend.direction = "horizontal",
+        strip.text.x = element_text(size = fsize, face="bold"),
+          axis.text=element_text(size=fsize),
+          axis.title=element_text(size=fsize, face="bold"),
+          legend.title = element_text(size=0, face="bold"),
+          legend.text = element_text(size=fsize))+ 
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("Cycle")+
+  ylab("Mean of GEBVs")
+
+
+pdf("/Users/jinlongli/Desktop/dh-diallel/graphs/gebv_sum_d100_7_14.pdf", width=10, height=7)
+p3
+dev.off()
+
+gebv_sum_sp_d100<-spread(gebv_sum, key = generation, value = GEBV)
+write.table(gebv_sum_sp_d100,"/Users/jinlongli/Desktop/dh-diallel/data/gs/gebv_sum_sp_d100.txt")
+
+```
+

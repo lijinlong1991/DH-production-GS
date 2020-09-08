@@ -1,0 +1,501 @@
+---
+title: "fix-model"
+author: "jinlong"
+date: "3/12/2020"
+output: html_document
+---
+
+```{r setup}
+# , include=TRUE, warning=FALSE, echo=TRUE, error=FALSE
+knitr::opts_knit$set(root.dir = normalizePath('../../'))
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, error=FALSE, echo=TRUE)
+```
+
+
+## k fold
+```{r}
+library(plyr)
+CVgroup <- function(k,datasize){
+  cvlist <- list()
+  n <- rep(1:k,ceiling(datasize/k))[1:datasize]    #将数据分成K份，并生成的完成数据集n
+  temp <- sample(n,datasize)   #把n打乱
+  x <- 1:k
+  dataseq <- 1:datasize
+  cvlist <- lapply(x,function(x) dataseq[temp==x])  #dataseq中随机生成k个随机有序数据列
+  return(cvlist)
+}
+
+```
+
+
+## pheno data
+```{r}
+
+#### load the numeric genotype and phenotype ####
+library(data.table)
+
+phe_all<-fread("data/gs/phe_hyb.txt", data.table=FALSE)
+phe_all<-phe_all[,-1:-2]
+names(phe_all)
+
+
+```
+
+
+
+## geno data
+```{r}
+#### load the numeric genotype and phenotype ####
+
+geno_a <-fread("data/gs/geno_hyb_0703.txt", data.table=FALSE)
+row.names(geno_a)=geno_a[,1]
+geno_a <- geno_a[,-1]
+
+library(sommer)
+G<-A.mat(geno_a)
+colnames(G)
+name<-colnames(G)
+```
+
+
+
+
+
+
+
+
+## pedigree relationship with inbred relationship
+```{r}
+library(data.table)
+inb_gm<-fread("data/G_inb_matrix.txt", data.table=F)
+head(inb_gm)
+row.names(inb_gm)<-inb_gm[,1];inb_gm<-inb_gm[,-1]
+head(inb_gm)
+
+inb_dm<-diag(27)
+inb_dm<-as.data.frame(inb_dm)
+names(inb_dm)<-rownames(inb_gm)
+row.names(inb_dm)<-rownames(inb_gm)
+
+
+
+A12<-data.frame()
+for (i in 1:27){
+  for (j in 1:158){
+    p <- unlist(strsplit(name[j],split='x'))
+    p1<-p[1]
+    p2<-p[2]
+    A12[i,j]<-(inb_dm[i,which(names(inb_dm)==p1)]+inb_dm[i,which(names(inb_dm)==p2)])/2
+  }
+  
+}
+
+A21<-t(A12)
+A21<-as.data.frame(A21)
+names(A21)=names(inb_dm)
+
+A22<-data.frame()
+for (i in 1:158){
+  for (j in 1:158){
+    p <- unlist(strsplit(name[j],split='x'))
+    p1<-p[1]
+    p2<-p[2]
+    A22[i,j]<-(A21[i,which(names(A21)==p1)]+A21[i,which(names(A21)==p2)])/2
+  }
+}
+
+for (i in 1:158){
+    p <- unlist(strsplit(name[j],split='x'))
+    p1<-p[1]
+    p2<-p[2]
+    A22[i,i]<-((A21[i,which(names(A21)==p1)]+A21[i,which(names(A21)==p2)]-1)/2)+1
+}
+class(A22)
+names(A22)<-rownames(geno_a)
+row.names(A22)<-rownames(geno_a)
+A22<-as.matrix(A22)
+heatmap(A)
+sss<-heatmap(G)
+sss$rowInd
+A<-A22
+
+```
+
+
+
+
+## preduction
+```{r}
+library(sommer)
+library(rrBLUP)
+G<-A.mat(geno_a);D<-D.mat(geno_a)
+
+datasize <- nrow(phe_all)
+
+Z <- diag(length(phe_all[,1])) 
+    #ETA <- list(maize=list(Z=Z1, K=D+A))
+ETA1 <- list(list(Z=Z, K=G)) ## GBLUP-A
+ETA2 <- list(list(Z=Z, K=G),list(Z=Z,K=D)) ## GBLUP-AD
+ETA3 <- list(list(Z=Z, K=A)) ## GBLUP-A
+
+
+k=5
+repeats <- 100
+acc_all<- data.frame()
+for (j in 1:2){
+ acc_p<-data.frame()
+  for(p in 1:repeats){
+     acc1 <- as.numeric()
+     acc2 <- as.numeric()
+     acc3 <- as.numeric()
+     acc4 <- as.numeric()
+     acc_k<-data.frame()
+
+  cvlist <- CVgroup(k = k,datasize = datasize)
+  for(i in 1:k){
+    y<-phe_all[,j]
+    tst <- unlist(cvlist[i])
+    y_real<- y[tst]
+    y[tst] <- NA
+
+
+
+    ans1 <- mmer(Y=y,Z=ETA1,method = "EMMA")
+    ans2 <- mmer(Y=y,Z=ETA2,method = "NR")
+    ans3 <- mmer(Y=y,Z=ETA3,method = "EMMA")
+    ans4 <- mixed.solve(y=y[-tst],Z=geno_a[-tst,],SE=F,return.Hinv=F)
+
+
+    
+    
+    pre1<-as.numeric(ans1$fitted.y)[tst]
+    pre2<-as.numeric(ans2$fitted.y)[tst]
+    pre3<-as.numeric(ans3$fitted.y)[tst]
+    
+    effect_raw <- as.matrix(ans4$u)
+    Marker_test <- as.matrix(geno_a[tst,])
+    pre4 <- ans4$beta + (Marker_test%*%effect_raw)[,1]
+
+    cor_m1<-cor(pre1,y_real,use="complete")
+    cor_m2<-cor(pre2,y_real,use="complete")
+    cor_m3<-cor(pre3,y_real,use="complete")
+    cor_m4<-cor(pre4,y_real,use="complete")
+    
+    acc1<-c(acc1,cor_m1)
+    acc2<-c(acc2,cor_m2)
+    acc3<-c(acc3,cor_m3)
+    acc4<-c(acc4,cor_m4)
+    
+    print(paste(i,"th set for",p,"th round",j,"th pheno"))
+    
+  }
+    acc1<-data.frame(mean(acc1),"GBLUP-A",names(phe_all)[j],p)
+    acc2<-data.frame(mean(acc2),"GBLUP-AD",names(phe_all)[j],p)
+    acc3<-data.frame(mean(acc3),"ABLUP",names(phe_all)[j],p)
+    acc4<-data.frame(mean(acc4),"rrBLUP",names(phe_all)[j],p)
+
+    names(acc1)=names(acc2)=names(acc3)=names(acc4)<-c("acc","method","pheno","rep")
+    acc_k<-data.frame(rbind(acc1,acc2,acc3,acc4))
+    acc_p<-rbind(acc_p,acc_k)
+
+  }
+acc_all<-rbind(acc_all,acc_p)
+}
+
+
+
+
+acc_all <- na.omit(acc_all)
+
+
+
+library(plyr)
+acc_sum<-ddply(acc_all,.(pheno,method),function(sub){
+  data.frame(acc.mean=mean(sub$acc),acc.sd=sd(sub$acc))})
+
+write.table(acc_all,"acc_all.txt")
+write.table(acc_sum,"acc_sum.txt")
+
+acc_sum_sp<-spread(acc_sum[,-4], key = pheno, value = acc.mean)
+write.table(acc_sum_sp,"data/gs/acc_sum_sp.txt")
+```
+
+
+
+
+
+
+
+## acc plot
+```{r}
+acc_all<-read.table("acc_all.txt",header=T)
+acc_sum<-read.table("acc_sum.txt",header=T)
+acc_all<-acc_all[which(acc_all$method != "ABLUP"),]
+acc_sum<-acc_sum[which(acc_sum$method != "ABLUP"),]
+cbPalette <- c('#999999',"#009E73", "#56B4E9","#E69F00", "#D55E00", "#CC79A7")
+
+#acc_all<-tidyr::unite(acc_all, "pheno_method", pheno, method,remove = FALSE)
+l<-c("GBLUP-A","GBLUP-AD","rrBLUP")
+acc_all$method = factor(acc_all$method, levels=l )
+
+
+library(stringr)
+name<-str_split_fixed(acc_all$pheno, "_", 2)
+acc_all_new<-data.frame(cbind(acc_all,name))
+names(acc_all_new)<-c("acc","method","pheno","rep","ploidy","pheno2")
+
+library(ggplot2)
+library(ggpubr)
+library(agricolae)
+library(stats)
+l<-c("PH","EH","DTS")
+acc_dipagro<-acc_all_new[which(acc_all_new$pheno2 %in% l),]
+acc_dipagro$pheno2 = factor(acc_dipagro$pheno2 , levels=l )
+
+
+fsize=18
+p<-ggplot(acc_dipagro, aes(x =method, y = acc, fill = method))+  
+ geom_violin(trim=FALSE,aes(fill = method, colour = method)) +
+ geom_boxplot(position = position_dodge(width = 0.9), outlier.size = 0.9, width = 0.2, show.legend = FALSE)+
+  facet_grid(ploidy~pheno2)+ theme_bw()+
+  theme_classic() +
+ scale_fill_manual(values=cbPalette)+
+  scale_color_manual(values=cbPalette)+
+  theme(
+          strip.text.x = element_text(family="Helvetica",size = fsize, face="bold"),
+          strip.text.y = element_text(family="Helvetica",size = fsize, face="bold"),
+          axis.text=element_text(family="Helvetica",size=14),
+          axis.text.x = element_text(family="Helvetica",angle = 45, hjust = 0.5, vjust = 0.5),
+          axis.title=element_text(family="Helvetica",size=fsize, face="bold"))+
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("")+
+  ylab("Prediction Accuracy (r)")+
+
+  theme(legend.position = 'none')
+p
+pdf("graphs/pre_hyb_8_21.pdf", width=8, height=6)
+p
+dev.off()
+
+```
+
+
+
+
+```{r}
+l<-c("HIR","HPR","AER","FFR")
+acc_key<-acc_all_new[which(acc_all$pheno %in% l),]
+acc_key$pheno = factor(acc_key$pheno , levels=l )
+
+
+fsize=18
+p<-ggplot(acc_key, aes(x =method, y = acc, fill = method))+  
+ geom_violin(trim=FALSE,aes(fill = method, colour = method)) +
+ geom_boxplot(position = position_dodge(width = 0.9), outlier.size = 0.9, width = 0.2, show.legend = FALSE)+
+  facet_wrap(~pheno,nrow=2)+ theme_bw()+
+  theme_classic() +
+ scale_fill_manual(values=cbPalette)+
+    scale_color_manual(values=cbPalette)+
+ theme(
+          strip.text.x = element_text(family="Helvetica",size = fsize, face="bold"),
+          strip.text.y = element_text(family="Helvetica",size = fsize, face="bold"),
+          axis.text=element_text(family="Helvetica",size=14),
+          axis.text.x = element_text(family="Helvetica",angle =45, hjust = 0.5, vjust = 0.5),
+          axis.title=element_text(family="Helvetica",size=fsize, face="bold"))+
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("")+
+  ylab("Prediction Accuracy (r)")+
+  theme(legend.position = 'none')+ylim(0.3,0.8)
+
+p
+pdf("graphs/pre_key_8_21.pdf", width=6, height=6)
+p
+dev.off()
+
+
+
+l<-c("TKC","KNPR","ERN")
+acc_yld<-acc_all_new[which(acc_all_new$pheno2 %in% l),]
+acc_yld$pheno2 = factor(acc_yld$pheno2 , levels=l )
+
+
+
+fsize=18
+p<-ggplot(acc_yld, aes(x =method, y = acc, fill = method))+  
+ geom_violin(trim=FALSE,aes(fill = method, colour = method)) +
+ geom_boxplot(position = position_dodge(width = 0.9), outlier.size = 0.9, width = 0.2, show.legend = FALSE)+
+  facet_grid(ploidy~pheno2, scales="free")+ theme_bw()+
+  theme_classic() +
+ scale_fill_manual(values=cbPalette)+
+    scale_color_manual(values=cbPalette)+
+ theme(
+          strip.text.x = element_text(family="Helvetica",size = fsize, face="bold"),
+          strip.text.y = element_text(family="Helvetica",size = fsize, face="bold"),
+          axis.text=element_text(family="Helvetica",size=14),
+          axis.text.x = element_text(family="Helvetica",angle = 45, hjust = 0.5, vjust = 0.5),
+          axis.title=element_text(family="Helvetica",size=fsize, face="bold"))+
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("")+
+  ylab("Prediction Accuracy (r)")+
+  theme(legend.position = 'none')+ylim(0.3,0.8)
+
+p
+pdf("graphs/pre_yld_8_21.pdf", width=8, height=6)
+p
+dev.off()
+
+
+
+
+
+```
+
+## normal function
+```{r}
+normal<-function(x){
+      return((x-min(x,na.rm = TRUE))/(max(x,na.rm = TRUE)-min(x,na.rm = TRUE)))} 
+```
+
+
+## index
+
+```{r}
+## filtter key traits
+names(phe_all)
+phe_key<-phe_all[,13:16]
+phe_yield<-phe_all[,c(7,9,11)]
+names(phe_yield)<-c("ERN","KNPR","TKC")
+## filtter key traits
+sca_HIR <- scale(phe_key$HIR)
+sca_HPR <- scale(phe_key$HPR)
+sca_AER <- scale(phe_key$AER)
+sca_FFR <- scale(phe_key$FFR)
+sca_ERN <- scale(phe_yield$ERN)
+sca_KNPR <- scale(phe_yield$KNPR)
+sca_TKC <- scale(phe_yield$TKC)
+
+
+index_phe_raw1<-scale(sca_HIR+sca_HPR+sca_AER+sca_FFR)
+index_phe_raw2<-scale(sca_ERN+sca_KNPR+sca_TKC)
+
+index<-NULL
+for (i in 0:10){
+  index_w<-scale(index_phe_raw1*i/10 +index_phe_raw2*(10-i)/10)
+  index<-cbind(index,index_w)
+}
+
+
+index<-data.frame(index)
+names(index)<-paste0("w-",(0:10)/10)
+
+
+```
+
+
+
+```{r}
+
+library(rrBLUP)
+
+datasize<-nrow(index)
+
+
+k=5
+repeats <- 20
+acc_all_index<- data.frame()
+for (j in 1:11){
+ acc_p<-data.frame()
+  for(p in 1:repeats){
+     acc1 <- as.numeric()
+
+     acc_k<-data.frame()
+
+  cvlist <- CVgroup(k = k,datasize = datasize)
+  for(i in 1:k){
+    y<-index[,j]
+    tst <- unlist(cvlist[i])
+    y_real<- y[tst]
+    y[tst] <- NA
+
+
+    ans1 <- mixed.solve(y=y[-tst],Z=geno_a[-tst,],SE=F,return.Hinv=F)
+
+    effect_raw <- as.matrix(ans1$u)
+    Marker_test <- as.matrix(geno_a[tst,])
+    pre1 <- as.vector(ans1$beta) + (Marker_test%*%effect_raw)[,1]
+
+    cor_m1<-cor(pre1,y_real,use="complete")
+    
+    acc1<-c(acc1,cor_m1)
+
+    
+    print(paste(i,"th set for",p,"th round",j,"th pheno"))
+    
+  }
+    acc1<-data.frame(mean(acc1),"rrBLUP",names(index)[j],p)
+
+    names(acc1)<-c("acc","method","pheno","rep")
+    acc_k<-data.frame(acc1)
+    acc_p<-rbind(acc_p,acc_k)
+
+  }
+acc_all_index<-rbind(acc_all_index,acc_p)
+}
+
+
+
+
+library(plyr)
+acc_index_sum<-ddply(acc_all_index,.(pheno,method),function(sub){
+  data.frame(acc.mean=mean(sub$acc),acc.sd=sd(sub$acc))})
+
+write.table(acc_all_index,"acc_all_index.txt")
+write.table(acc_index_sum,"acc_index_sum.txt")
+
+
+
+```
+
+
+## gs-index plot
+```{r}
+
+acc_all_index<-read.table("acc_all_index.txt",header=T)
+acc_index_sum<-read.table("acc_index_sum.txt",header=T)
+
+l<-(0:10)/10
+levels(acc_all_index$pheno)<-l
+levels(acc_index_sum$pheno)<-l
+
+acc_all_index$pheno = factor(acc_all_index$pheno , levels=l )
+acc_index_sum$pheno= factor(acc_index_sum$pheno , levels=l )
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+library(ggplot2)
+fsize=18
+p<-ggplot(acc_all_index, aes(x =pheno, y = acc, fill = pheno))+  
+ geom_violin(trim=FALSE,aes(fill = pheno, color = pheno)) +
+ geom_boxplot(position = position_dodge(width = 0.9), outlier.size = 0.9, width = 0.2, show.legend = FALSE)+
+  scale_fill_manual(values=rep("#999999",11))+
+  scale_color_manual(values=rep("#999999",11))+
+  geom_point(data=acc_index_sum,aes(x=pheno,y=acc.mean),shape=16,size=3, color="black")+
+  geom_line(data=acc_index_sum,aes(x=pheno,y=acc.mean,group=1),linetype=2, color="black", size=1)+
+  theme_classic() +
+  theme(
+          strip.text.x = element_text(family="Helvetica",size = fsize, face="bold"),
+          strip.text.y = element_text(family="Helvetica",size = fsize, face="bold"),
+          axis.text=element_text(family="Helvetica",size=fsize),
+          axis.text.x = element_text(family="Helvetica",angle = 0, hjust = 0.5, vjust = 0.5),
+          axis.title=element_text(family="Helvetica",size=fsize, face="bold"))+
+          theme(panel.background = element_rect( colour = "black", size = 1))+
+  xlab("Weight of Indexes (w)")+
+  ylab("Prediction Accuracy (r)")+
+  theme(legend.position = 'none')
+
+p
+pdf("graphs/pre_index_trait_7_22.pdf", width=8, height=6)
+p
+dev.off()
+```
+
+
